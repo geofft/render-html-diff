@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html>
 <body>
+
 <template id="svg-template">
 <svg xmlns="http://www.w3.org/2000/svg">
 <foreignObject width="100%" height="100%">
@@ -9,25 +10,55 @@
 </foreignObject>
 </svg>
 </template>
+
+<template id="diff-controls-template">
+<button type="button">Diff</button> |
+<button type="button">Old</button> |
+<button type="button">New</button>
+</template>
+
+<label for="base-url">Base URL:</label>
+<input id="base-url" value="https://example.com">
+<div id="drag-target" style="padding: 1em; border: solid;">
+Drag local directory here
+</div>
+<dl id="output"></dl>
+
 <script type="module">
-const outCanvas = document.getElementById("out-canvas")
-const ctx = outCanvas.getContext("2d");
-const width = outCanvas.width;
-const height = outCanvas.height;
+const width = 1024;
+const height = 1024;
 
 const svgTemplate = document.getElementById("svg-template").content;
+const diffControlsTemplate = document.getElementById("diff-controls-template").content;
 const xmlSerializer = new XMLSerializer();
+const domParser = new DOMParser();
 
 function dataURL(contentType, body) {
     return `data:${contentType},${encodeURIComponent(body)}`;
 }
 
-// await render("<h1>hello world</h1>")
+class InvalidXMLError extends Error {
+    parsererror;
+    constructor(parsererror, ...params) {
+        super(...params);
+        this.parsererror = parsererror;
+    }
+}
+
+/* Render the given string to a canvas, and return the canvas and its 2D context. */
 async function render(html) {
     const svgdoc = svgTemplate.cloneNode(true);
-    svgdoc.width = width;
-    svgdoc.height = height;
-    svgdoc.querySelector("div").innerHTML = html;
+    const svg = svgdoc.querySelector("svg");
+    const div = svgdoc.querySelector("div");
+    svg.setAttribute("width", width);
+    svg.setAttribute("height", height);
+    div.innerHTML = html;
+
+    for (const link of div.querySelectorAll("link")) {
+        if (link.rel == "stylesheet") {
+            link.href = dataURL("text/css", await (await fetch(link.href)).text());
+        }
+    }
 
     const canvas = document.createElement("canvas");
     canvas.width = width;
@@ -38,42 +69,29 @@ async function render(html) {
     const imageLoad = new Promise((resolve, reject) => {
       img.addEventListener("load", resolve);
     });
-    img.src = dataURL("image/svg+xml", xmlSerializer.serializeToString(svgdoc));
+    const xml = xmlSerializer.serializeToString(svgdoc);
+    /* Certain poorly-formed HTML documents can parse in ways that
+     * cannot be seralized out to XML. Let's try to catch the error here
+     * before we get the image parser fails to render an image.
+     * See https://bugzilla.mozilla.org/1914813 */
+    const reparsed = domParser.parseFromString(xml, "text/xml");
+    if (reparsed.documentElement.nodeName != "svg") {
+        throw new InvalidXMLError(reparsed.querySelector("parsererror"));
+    }
+    img.src = dataURL("image/svg+xml", xml);
     //document.body.appendChild(img);
     await imageLoad;
 
     ctx.drawImage(img, 0, 0);
-    return ctx.getImageData(0, 0, width, height).data;
+    return [canvas, ctx];
 }
 
-/*
-function minus(a, b) {
-    //return ((a + 256 - b) % 256) | 0;
-    return (Math.max(a, b) - Math.min(a, b)) | 0;
-}
-
-function normalize(r, g, b, a) {
-    if (a == 255) {
-        return [r, g, b];
-    } else if (a == 0) {
-        return [255, 255, 255];
-    } else {
-        var f = a / 256;
-        var c = 255 - a;
-        return [(r * f) | 0 + c, (g * f) | 0 + c, (b * f) | 0 + c];
-    }
-}
-   var [ar, ag, ab] = normalize(...world.slice(o, o + 4));
-   var [br, bg, bb] = normalize(...womp.slice(o, o + 4));
-   diffedArray.set([minus(ar, br), minus(ag, bg), minus(ab, bb), 255], o);
-   diffedArray[offset + 0] = minus(world[offset + 0], womp[offset + 0]);
-   diffedArray[offset + 1] = minus(world[offset + 1], womp[offset + 1]);
-   diffedArray[offset + 2] = minus(world[offset + 2], womp[offset + 2]);
-   //diffedArray[offset + 3] = minus(world[offset + 3], womp[offset + 3]);
-   diffedArray[offset + 3] = Math.max(world[offset + 3], womp[offset + 3]);
-*/
-
-function renderDiff(older, newer) {
+/* Given two canvas contexts, return an ImageData with black pixels in
+ * every location that they are different, or undefined if they are not
+ * different. */
+function renderDiff(olderCtx, newerCtx) {
+    const older = olderCtx.getImageData(0, 0, width, height).data;
+    const newer = newerCtx.getImageData(0, 0, width, height).data;
     const diffedArray = new Uint8ClampedArray(width * height * 4);
     let isDifferent = false;
 
@@ -85,30 +103,134 @@ function renderDiff(older, newer) {
             isDifferent = true;
         }
     }
-    return new ImageData(diffedArray, width, height);
+
+    if (isDifferent) {
+        return new ImageData(diffedArray, width, height);
+    }
 }
 
+/* Given two HTML strings, either append their rendering diff or a message
+ * saying there is no diff to the given element. */
+async function showDiff(oldText, newText, element) {
+    let olderCanvas, olderCtx, newerCanvas, newerCtx;
+    try {
+        [olderCanvas, olderCtx] = await render(oldText);
+        [newerCanvas, newerCtx] = await render(newText);
+    } catch (e) {
+        if (e instanceof InvalidXMLError) {
+            element.appendChild(e.parsererror);
+            return;
+        } else {
+            throw e;
+        }
+    }
+
+    const diff = renderDiff(olderCtx, newerCtx);
+
+    if (diff === undefined) {
+        const message = document.createElement("div");
+        message.innerText = "Renders are identical";
+        element.appendChild(message);
+    } else {
+        const controls = diffControlsTemplate.cloneNode(true);
+        const [showDiff, showOld, showNew] = controls.querySelectorAll("button");
+        element.appendChild(controls);
+
+        const diffCanvas = document.createElement("canvas");
+        diffCanvas.width = width;
+        diffCanvas.height = height;
+        {
+            const ctx = diffCanvas.getContext("2d");
+            ctx.putImageData(diff, 0, 0);
+        }
+        element.appendChild(diffCanvas);
+        for (const canvas of [olderCanvas, newerCanvas]) {
+            canvas.hidden = true;
+            element.appendChild(canvas);
+        }
+
+        showDiff.addEventListener("click", (e) => {
+            diffCanvas.hidden = false;
+            olderCanvas.hidden = true;
+            newerCanvas.hidden = true;
+        });
+        showOld.addEventListener("click", (e) => {
+            diffCanvas.hidden = true;
+            olderCanvas.hidden = false;
+            newerCanvas.hidden = true;
+        });
+        showNew.addEventListener("click", (e) => {
+            diffCanvas.hidden = true;
+            olderCanvas.hidden = true;
+            newerCanvas.hidden = false;
+        });
+    }
+}
+
+/* Given a FileSystemFileEntry, call await callback(entry) on it if it's a
+ * file, or recursively call callback on its children if it's a directory. */
+async function walkFile(entry, callback) {
+    if (entry.name[0] == ".") {
+        return;
+    } else if (entry.isDirectory) {
+        const r = entry.createReader();
+        let children;
+        do {
+            const p = Promise.withResolvers();
+            r.readEntries(p.resolve);
+            children = await p.promise;
+            for (const child of children) {
+                await walkFile(child, callback);
+            }
+        } while (children.length > 0);
+    } else {
+        await callback(entry);
+    }
+}
+
+const dragTarget = document.getElementById("drag-target");
+const baseUrl = document.getElementById("base-url");
+const output = document.getElementById("output");
+dragTarget.addEventListener("dragover", e => {e.preventDefault();});
+dragTarget.addEventListener("drop", async e => {
+    e.preventDefault(); 
+    const base = baseUrl.value;
+    for (const item of e.dataTransfer.items) {
+        await walkFile(item.webkitGetAsEntry(), async entry => {
+            //console.log(entry);
+            const slash = entry.fullPath.indexOf("/", 1);
+            const path = entry.fullPath.slice(slash + 1);
+
+            const dt = document.createElement("dt");
+            dt.innerText = path;
+            output.appendChild(dt);
+
+            const dd = document.createElement("dd");
+            const response = await fetch(`${base}${path}`);
+            if (response.ok) {
+                const contentType = response.headers.get("Content-Type");
+                if (contentType.startsWith("text/html")) {
+                    const oldText = await response.text();
+
+                    const p = Promise.withResolvers();
+                    entry.file(p.resolve, p.reject);
+                    const newText = (await (await p.promise).text());
+                    await showDiff(oldText, newText, dd);
+                } else {
+                    dd.innerText = `Ignoring non-HTML ${contentType}`;
+                }
+            } else {
+                dd.innerText = `Error ${response.status} ${response.statusText}`;
+            }
+            output.appendChild(dd);
+        });
+    };
+});
+
+/* Scripts of type module run in their own namespace, so assign some of
+ * our functions to window so we can play with them in the browser
+ * console. */
 Object.assign(window, {render, renderDiff});
-
-const older = await render(await (await fetch("../blog-output/blog/per-computer-colored-prompts-in-bash")).text());
-const newer = await render("hi<p><h1>hello <font color=#000001>womp</font> womp</h1>");
-//ctx.putImageData(new ImageData(older, width, height), 0, 0);
-
-ctx.putImageData(renderDiff(older, newer), 0, 0);
-
-/*
-
-document.querySelector("img").addEventListener("dragover", e => {e.preventDefault();});
-undefined
-let p = Promise.withResolvers();
-undefined
-document.querySelector("img").addEventListener("drop", e => {e.preventDefault(); p.resolve(e.dataTransfer.items);}); 
-
-let e = f[0].webkitGetAsEntry();
-e.createReader().readEntries(console.log) 
-*/
-
 </script>
-<canvas width="1024" height="512" id="out-canvas"></canvas>
 </body>
 </html>
