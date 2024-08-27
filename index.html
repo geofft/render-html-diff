@@ -10,9 +10,11 @@
 </template>
 
 <template id="diff-controls-template">
+<div>
 <button type="button">Diff</button> |
 <button type="button">Old</button> |
 <button type="button">New</button>
+</div>
 </template>
 
 <label for="base-url">Base URL:</label>
@@ -162,11 +164,10 @@ async function showDiff(oldText, newText, element) {
         const diffCanvas = document.createElement("canvas");
         diffCanvas.width = width;
         diffCanvas.height = height;
-        {
-            const ctx = diffCanvas.getContext("2d");
-            ctx.putImageData(diff, 0, 0);
-        }
+        const ctx = diffCanvas.getContext("2d");
+        ctx.putImageData(diff, 0, 0);
         element.appendChild(diffCanvas);
+
         for (const canvas of [olderCanvas, newerCanvas]) {
             canvas.hidden = true;
             element.appendChild(canvas);
