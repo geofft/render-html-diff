@@ -76,27 +76,25 @@ async function render(html) {
     if (reparsed.documentElement.nodeName != "svg") {
         throw new ImageLoadingError(reparsed.querySelector("parsererror"));
     }
+
     const img = document.createElement("img");
     img.src = dataURL("image/svg+xml", xml);
     const imageLoad = Promise.withResolvers();
-    let settled = false;
-    img.addEventListener("load", (e) => {
-        settled = true;
-        imageLoad.resolve(e);
-    });
+    img.addEventListener("load", imageLoad.resolve);
     function complain(message) {
-        if (settled)
-            return;
-        settled = true;
-        console.log("Try opening this image's URL in a new tab:");
-        console.log(img);
         const error = document.createElement("div");
         error.innerText = `${message} loading image; see console.`
         imageLoad.reject(new ImageLoadingError(error));
     }
     img.addEventListener("error", () => complain("Error"));
     setTimeout(() => complain("Timeout"), 5000);
-    await imageLoad.promise;
+    try {
+        await imageLoad.promise;
+    } catch (e) {
+        console.log("Try opening this image's URL in a new tab:");
+        console.log(img);
+        throw e;
+    }
 
     ctx.drawImage(img, 0, 0);
     return [canvas, ctx];
