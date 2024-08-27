@@ -60,6 +60,16 @@ async function render(html) {
         }
     }
 
+    /* Site-specific workaround to deal with malformed HTML in my
+     * website's Open Graph tags by deleting them before they trip the
+     * more general error-handling below. Should be generically harmless
+     * becausethey don't influence rendering. */
+    for (const meta of div.querySelectorAll("meta")) {
+        if ((meta.getAttribute('property') ?? '').startsWith('og:')) {
+            meta.remove();
+        }
+    }
+
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
