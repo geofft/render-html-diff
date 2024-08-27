@@ -11,6 +11,12 @@ Finder/Explorer/etc.) onto the labeled target. If you want to see the
 diff mode in action, try making a small textual change to your local
 directory.
 
+This tool runs entirely client-side, so your website needs to be
+accessible by `fetch()`. If you're using the link above, that means you
+need CORS enabled (which is generally fine for public websites).
+Alternatively, you can upload a copy of the HTML file to your own
+domain, so it's not cross-origin.
+
 It uses [the approach outlined by Ron Valstar to render HTML to an
 image](https://ronvalstar.nl/render-html-to-an-image) by converting
 through an SVG `foreignElement` and an image tag, and then compares the
